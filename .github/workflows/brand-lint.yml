@@ -1,0 +1,41 @@
+name: brand-lint
+
+# Organisation profile repository: no extension to package and no claims
+# section, so the vsix and claim-audit jobs from the product repos do not apply.
+true:
+  push: null
+  pull_request: null
+  workflow_dispatch: null
+permissions:
+  contents: read
+jobs:
+  brand-lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    - name: Negative proof (the gate must be able to fail)
+      run: node --test tests/brand-lint.negative.test.mjs
+    - name: provenance placement guard
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: node scripts/brand-lint.mjs --provenance-guard
+    - name: brand-lint
+      id: lint
+      shell: bash
+      run: 'set -euo pipefail
+
+        node scripts/brand-lint.mjs --json | tee brand-lint-report.json
+
+        '
+    - name: Upload report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: brand-lint-report
+        path: brand-lint-report.json
+        if-no-files-found: warn
