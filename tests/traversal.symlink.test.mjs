@@ -18,7 +18,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, existsSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
@@ -46,6 +46,28 @@ function plantedBehindSymlink() {
   // the shape that hid the real leak: a link named like a normal clone
   symlinkSync(real, join(outer, 'linked-clone'));
   return { real, outer };
+}
+
+/**
+ * A rule-set root with the host repository's baselines ZEROED.
+ *
+ * Without this the test inherits whatever migration debt the host repo carries.
+ * In a repository with public_surface_baseline 2171, a single planted finding is
+ * comfortably under budget and the scanner exits 0 — so the proof passes while
+ * proving nothing. That is exactly the defect this programme already fixed once
+ * in the brand-lint negproof; it recurred here because a new test copied the
+ * pattern without the neutralisation.
+ */
+function zeroedRoot() {
+  const d = mkdtempSync(join(tmpdir(), 'traversal-rules-'));
+  const m = JSON.parse(readFileSync(join(ROOT, '.brandmap.json'), 'utf8'));
+  m.id_baseline = 0;
+  m.public_surface_baseline = 0;
+  delete m.vsix_id_baseline;
+  writeFileSync(join(d, '.brandmap.json'), JSON.stringify(m, null, 2));
+  const si = join(ROOT, '.secretlintignore');
+  if (existsSync(si)) writeFileSync(join(d, '.secretlintignore'), readFileSync(si, 'utf8'));
+  return d;
 }
 
 function run(bin, args) {
@@ -94,7 +116,9 @@ test('secret-lint --dir reads a planted key THROUGH a symlinked directory', () =
     mkdirSync(join(real, 'nested'), { recursive: true });
     writeFileSync(join(real, 'nested', 'deploy.sh'), `#!/bin/sh\nGH_TOKEN="${GH}" gh repo list\n`);
     symlinkSync(real, join(outer, 'linked-dir'));
-    const { code, out } = run(SECRET_LINT, [`--dir=${outer}`, `--root=${ROOT}`, '--json']);
+    const rules = zeroedRoot();
+    const { code, out } = run(SECRET_LINT, [`--dir=${outer}`, `--root=${rules}`, '--json']);
+    rmSync(rules, { recursive: true, force: true });
     assert.equal(code, 1, 'a credential under a symlinked directory must be found');
     const rep = JSON.parse(out);
     assert.ok(rep.results.some((x) => x.rule === 'inline-env-prefix'));
@@ -113,7 +137,9 @@ test('brand-lint --dir reads a forbidden term THROUGH a symlinked directory', ()
     mkdirSync(join(real, 'docs'), { recursive: true });
     writeFileSync(join(real, 'docs', 'setup.md'), `# Setup\n\nRun the ${OLLAMA} server.\n`);
     symlinkSync(real, join(outer, 'linked-docs'));
-    const { code, out } = run(BRAND_LINT, [`--dir=${outer}`, `--root=${ROOT}`, '--json']);
+    const rules = zeroedRoot();
+    const { code, out } = run(BRAND_LINT, [`--dir=${outer}`, `--root=${rules}`, '--json']);
+    rmSync(rules, { recursive: true, force: true });
     assert.equal(code, 1, 'a forbidden term under a symlinked directory must be found');
     const rep = JSON.parse(out);
     assert.ok(rep.findings.some((f) => f.term === OLLAMA));
